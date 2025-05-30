@@ -1,0 +1,146 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+local Client = Players.LocalPlayer
+local Mouse = Client:GetMouse()
+
+--// Silent Aim Setup
+local SilentTarget = nil
+local SilentTargetPart = nil
+
+--// Drawing FOV
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Color = Color3.new(1, 1, 1)
+FOVCircle.Thickness = 1
+FOVCircle.Filled = false
+FOVCircle.Transparency = 0.85
+FOVCircle.Visible = true
+
+local function GetMousePos()
+    local pos = UserInputService:GetMouseLocation()
+    return Vector2.new(pos.X, pos.Y)
+end
+
+local function GetClosestTarget()
+    local closest, part, shortest = nil, nil, axtree.SilentAim.FOV
+    local mouse = GetMousePos()
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= Client and player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+            for _, bodyPart in ipairs(axtree.SilentAim.BodyPart.Normal) do
+                local p = player.Character:FindFirstChild(bodyPart)
+                if p then
+                    local screen, onScreen = Camera:WorldToScreenPoint(p.Position)
+                    if onScreen then
+                        local dist = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
+                        if dist < shortest then
+                            closest, part, shortest = player, p, dist
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return closest, part
+end
+
+RunService.Heartbeat:Connect(function()
+    if axtree.SilentAim.Enabled then
+        SilentTarget, SilentTargetPart = GetClosestTarget()
+    else
+        SilentTarget, SilentTargetPart = nil, nil
+    end
+    FOVCircle.Position = GetMousePos()
+    FOVCircle.Radius = axtree.SilentAim.FOV
+end)
+
+--// Camlock
+local Locking = false
+local TargetPlayer = nil
+
+local function GetClosestPlayerToCursor()
+    local minDist, closest = math.huge, nil
+    local mouse = GetMousePos()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= Client and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Humanoid").Health > 0 then
+            local screen, visible = Camera:WorldToViewportPoint(player.Character.HumanoidRootPart.Position)
+            if visible then
+                local dist = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
+                if dist < minDist then
+                    minDist, closest = dist, player
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function UpdateCamlock()
+    if Locking and TargetPlayer and TargetPlayer.Character then
+        local part = TargetPlayer.Character:FindFirstChild(axtree.Camlock.Config.TargetPart)
+        if part then
+            local aimPos = part.Position
+            local pred = TargetPlayer.Character:FindFirstChild("HumanoidRootPart") and TargetPlayer.Character.HumanoidRootPart.Velocity * axtree.Camlock.Config.Prediction or Vector3.zero
+            aimPos += pred
+            if axtree.Camlock.Config.ShakeEnabled then
+                aimPos += Vector3.new(
+                    math.random() * axtree.Camlock.Config.Shake,
+                    math.random() * axtree.Camlock.Config.Shake,
+                    math.random() * axtree.Camlock.Config.Shake
+                )
+            end
+            local camCF = Camera.CFrame
+            Camera.CFrame = camCF:Lerp(CFrame.new(camCF.Position, aimPos), axtree.Camlock.Config.Amount)
+        end
+    end
+end
+
+--// Input Handling
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+
+    if input.KeyCode == axtree.Camlock.Config.Keybind then
+        Locking = not Locking
+        TargetPlayer = Locking and GetClosestPlayerToCursor() or nil
+    elseif input.KeyCode == axtree.TargetAim.Config.Keybind then
+        local closest = GetClosestPlayerToCursor()
+        if closest then
+            Target = closest
+            axtree.TargetAim.Config.Enabled = true
+        else
+            Target = nil
+            axtree.TargetAim.Config.Enabled = false
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(UpdateCamlock)
+
+--// Unified Mouse Spoofing
+local success, mt = pcall(getrawmetatable, game)
+if success and mt and setreadonly then
+    setreadonly(mt, false)
+    local oldIndex = mt.__index
+    mt.__index = function(self, idx)
+        if not checkcaller() and self == Mouse then
+            if idx == "Hit" then
+                if axtree.SilentAim.Enabled and SilentTargetPart then
+                    return CFrame.new(SilentTargetPart.Position)
+                elseif axtree.TargetAim.Config.Enabled and Target and Target.Character then
+                    local part = Target.Character:FindFirstChild(axtree.TargetAim.Config.Part)
+                    if part then
+                        return CFrame.new(part.Position + part.Velocity * axtree.TargetAim.Config.Prediction)
+                    end
+                end
+            elseif idx == "Target" then
+                if axtree.SilentAim.Enabled and SilentTargetPart then
+                    return SilentTargetPart
+                elseif axtree.TargetAim.Config.Enabled and Target and Target.Character then
+                    return Target.Character:FindFirstChild(axtree.TargetAim.Config.Part)
+                end
+            end
+        end
+        return oldIndex(self, idx)
+    end
+end
